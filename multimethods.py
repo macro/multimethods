@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 
-''' Multimethods
+"""
+Multimethods
 
 An implementation of multimethods for Python, heavily influenced by
 the Clojure programming language.
@@ -8,50 +9,59 @@ the Clojure programming language.
 Copyright (C) 2010-2011 by Daniel Werner.
 
 See the README file for information on usage and redistribution.
-'''
+"""
+
+import functools
 
 
 class DefaultMethod(object):
+    """
+        Class of singleton object allowing default MultiMethod.
+    """
     def __repr__(self):
         return '<DefaultMethod>'
 
 Default = DefaultMethod()
 
 
+def get_multimethod_key(*args, **kwargs):
+    """
+        Creates immutable key out of args and kwargs.
+    """
+    return tuple(map(repr, args) + map(repr, kwargs.itervalues()))
+
 class MultiMethod(object):
-    instances = {}
+    __instances__ = {}
 
-    def __init__(self, name, dispatchfn):
-        if not callable(dispatchfn):
-            raise TypeError('dispatchfn must be callable')
-
-        if name in self.__class__.instances:
+    def __init__(self, name, dispatch_func=None):
+        if name in self.__class__.__instances__:
             raise Exception("A multimethod '%s' already exists, "
                             "redeclaring it would wreak havoc" % name)
-
-        self.dispatchfn = dispatchfn
+        self.dispatch_func = dispatch_func or get_multimethod_key
         self.methods = {}
+        self.default_method = None
         self.__name__ = name
-        self.__class__.instances[name] = self
+        self.__class__.__instances__[name] = self
 
-    def __call__(self, *args, **kwds):
-        dv = self.dispatchfn(*args, **kwds)
-
-        if dv in self.methods:
-            return self.methods[dv](*args, **kwds)
-
-        if Default in self.methods:
-            return self.methods[Default](*args, **kwds)
-
+    def __call__(self, *args, **kwargs):
+        dispatch_key = self.dispatch_func(*args, **kwargs)
+        if dispatch_key in self.methods:
+            return self.methods[dispatch_key](*args, **kwargs)
+        if self.default_method is not None:
+            return self.default_method(*args, **kwargs)
         raise Exception("No matching method on multimethod '%s' and "
                         "no default method defined" % self.__name__)
 
-    def addmethod(self, func, dispatchval):
-        self.methods[dispatchval] = func
+    def add_method(self, func, *args):
+        if args == (Default,):
+            self.default_method = func
+        else:
+            dispatch_key = get_multimethod_key(*args)
+            self.methods[dispatch_key] = func
 
-    def removemethod(self, dispatchval):
-        del self.methods[dispatchval].multimethod
-        del self.methods[dispatchval]
+    def remove_method(self, dispatch_val):
+        del self.methods[dispatch_val].multimethod
+        del self.methods[dispatch_val]
 
     def methods(self):
         return self.methods
@@ -60,23 +70,23 @@ class MultiMethod(object):
         return "<MultiMethod '%s'>" % self.__name__
 
 
-def method(dispatchval):
+def method(*args):
     def method_decorator(func):
-        '''Decorator which registers a function as a new method of a like-named multimethod,
-        keyed by dispatchval.
-
-        The multimethod is determined by taking the method's name up to the last occurence
-        of '__', e.g. function foo_bar__zig will become a method on the foo_bar multimethod.'''
-
+        """
+           Decorator which registers a function as a new method of a like-named
+           multimethod, keyed by dispatch_val.  The multimethod is determined by
+           taking the method's name up to the last occurence of '__',
+           e.g. function foo_bar__zig will become a method on the foo_bar
+           multimethod.
+        """
         try:
-            multim = MultiMethod.instances[func.__name__]
+            multimethod = MultiMethod.__instances__[func.__name__]
         except KeyError:
-            raise KeyError("Multimethod '%s' not found; it must exist before methods can be added")
-
-        multim.addmethod(func, dispatchval)
-
-        return multim
-
+            # create multimethod (don't require registration)
+            multimethod = MultiMethod(func.__name__)
+        functools.update_wrapper(multimethod, func)
+        multimethod.add_method(func, *args)
+        return multimethod
     return method_decorator
 
 __all__ = ['MultiMethod', 'method', 'Default']
